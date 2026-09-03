@@ -7,7 +7,14 @@ import httpx
 import pytest
 
 from ingestion.inmet.client import InmetAPIError, InmetClient
-from ingestion.inmet.extract import aggregate_daily, parse_hourly_readings
+from ingestion.inmet.extract import (
+    _default_date_range,
+    _parse_float,
+    aggregate_daily,
+    extract_daily_climate,
+    parse_hourly_readings,
+    write_daily_climate_parquet,
+)
 
 STATION_CODE = "A807"
 
@@ -79,6 +86,18 @@ def test_parse_hourly_readings_skips_records_without_date():
 
 def test_parse_hourly_readings_empty_response():
     assert parse_hourly_readings([], STATION_CODE) == []
+
+
+# --- _parse_float ---
+
+
+def test_parse_float_passes_through_numeric_types():
+    assert _parse_float(18) == 18.0
+    assert _parse_float(18.5) == 18.5
+
+
+def test_parse_float_returns_none_for_unparseable_string():
+    assert _parse_float("not-a-number") is None
 
 
 # --- aggregate_daily ---
@@ -260,3 +279,156 @@ def test_client_respects_retry_after_header_on_429(monkeypatch):
     client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
     assert sleep_calls == [2.0]
+
+
+def test_client_falls_back_to_backoff_when_retry_after_is_not_numeric(monkeypatch):
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(
+        "ingestion.inmet.client.time.sleep", lambda seconds: sleep_calls.append(seconds)
+    )
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Per HTTP spec, Retry-After may be an HTTP-date instead of seconds.
+            return httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
+        return httpx.Response(200, json=[])
+
+    client = _make_client(handler, max_retries=3, backoff_factor=1.0)
+    client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
+
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] >= 1.0  # fell back to exponential backoff, not a parsed date
+
+
+def test_client_retries_transport_errors_then_succeeds(monkeypatch):
+    monkeypatch.setattr("ingestion.inmet.client.time.sleep", lambda *_args, **_kwargs: None)
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json=[])
+
+    client = _make_client(handler, max_retries=3)
+    result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
+
+    assert result == []
+    assert call_count["n"] == 2
+
+
+def test_client_context_manager_closes_underlying_httpx_client():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    with _make_client(handler) as client:
+        assert client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01") == []
+
+    assert client._client.is_closed
+
+
+# --- write_daily_climate_parquet ---
+
+
+def test_write_daily_climate_parquet_writes_partitioned_and_idempotent(tmp_path):
+    import duckdb
+
+    rows = [
+        {
+            "station_code": STATION_CODE,
+            "date": "2024-05-01",
+            "avg_temp": 18.0,
+            "min_temp": 12.0,
+            "max_temp": 24.0,
+            "avg_relative_humidity": 80.0,
+            "total_precipitation": 1.5,
+        }
+    ]
+
+    write_daily_climate_parquet(rows, output_dir=tmp_path)
+    row_count = write_daily_climate_parquet(rows, output_dir=tmp_path)  # rerun: idempotency check
+
+    assert row_count == 1
+    assert list(tmp_path.glob("date=2024-05-01/*.parquet"))
+
+    result = duckdb.connect().execute(
+        f"SELECT station_code, avg_temp FROM read_parquet('{tmp_path.as_posix()}/**/*.parquet')"
+    ).fetchall()
+    assert result == [(STATION_CODE, 18.0)]
+
+
+def test_write_daily_climate_parquet_handles_empty_rows(tmp_path):
+    assert write_daily_climate_parquet([], output_dir=tmp_path) == 0
+
+
+# --- extract_daily_climate (orchestration, client faked) ---
+
+
+class _FakeInmetClient:
+    def __init__(self, responses: dict[str, list[dict]]) -> None:
+        self._responses = responses
+
+    def __enter__(self) -> "_FakeInmetClient":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def get_station_readings(self, station_code, start_date, end_date):
+        return self._responses.get(station_code, [])
+
+
+def test_extract_daily_climate_orchestrates_fetch_aggregate_and_write(monkeypatch, tmp_path):
+    responses = {
+        "A807": [
+            {
+                "CD_ESTACAO": "A807",
+                "DT_MEDICAO": "2024-05-01",
+                "TEM_INS": "20.0",
+                "TEM_MAX": "25.0",
+                "TEM_MIN": "15.0",
+                "UMD_INS": "70",
+                "CHUVA": "0.0",
+            }
+        ],
+        "A999": [],  # empty response for a second station: should not break the run
+    }
+    monkeypatch.setattr(
+        "ingestion.inmet.extract.InmetClient", lambda: _FakeInmetClient(responses)
+    )
+
+    row_count = extract_daily_climate(
+        station_codes=["A807", "A999"],
+        start_date="2024-05-01",
+        end_date="2024-05-01",
+        output_dir=tmp_path,
+    )
+
+    assert row_count == 1
+    assert list(tmp_path.glob("date=2024-05-01/*.parquet"))
+
+
+def test_extract_daily_climate_raises_without_station_codes(tmp_path):
+    with pytest.raises(ValueError):
+        extract_daily_climate(
+            station_codes=[],
+            start_date="2024-05-01",
+            end_date="2024-05-01",
+            output_dir=tmp_path,
+        )
+
+
+# --- _default_date_range ---
+
+
+def test_default_date_range_is_yesterday():
+    from datetime import date, timedelta
+
+    start, end = _default_date_range()
+    expected = (date.today() - timedelta(days=1)).isoformat()
+
+    assert start == end == expected

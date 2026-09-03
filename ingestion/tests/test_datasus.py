@@ -1,14 +1,17 @@
-"""Tests for the DataSUS/SIH-RD ingestion module. No real pysus/network
-calls are made — `DatasusClient.download_state_month` is monkeypatched to
-return fixture DataFrames instead."""
+"""Tests for the DataSUS/SIH-RD ingestion module. No real network calls are
+made: the client-level tests monkeypatch `pysus.ftp.sih` itself (so the
+DatasusClient's own success/empty/error handling is actually exercised),
+while the orchestration tests monkeypatch `DatasusClient.download_state_month`
+directly to isolate extract.py's filtering/combining logic."""
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
-from ingestion.datasus.client import DatasusClient
+from ingestion.datasus.client import DatasusClient, DatasusClientError
 from ingestion.datasus.extract import (
+    _default_24_month_range,
     _month_range,
     extract_respiratory_admissions,
     filter_by_municipality,
@@ -188,3 +191,97 @@ def test_extract_respiratory_admissions_handles_no_matching_data(monkeypatch, tm
     )
 
     assert row_count == 0
+
+
+# --- DatasusClient.download_state_month (pysus.ftp.sih mocked directly) ---
+
+
+def test_download_state_month_returns_dataframe_on_success(monkeypatch):
+    import pysus
+
+    expected = pd.DataFrame([_raw_admission(n_aih="1")])
+    monkeypatch.setattr(pysus.ftp, "sih", lambda **kwargs: expected)
+
+    client = DatasusClient(uf="PR", group="RD")
+    result = client.download_state_month(2024, 1)
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_download_state_month_passes_expected_arguments(monkeypatch):
+    import pysus
+
+    captured = {}
+
+    def fake_sih(**kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(pysus.ftp, "sih", fake_sih)
+
+    DatasusClient(uf="PR", group="RD").download_state_month(2024, 3)
+
+    assert captured["state"] == "PR"
+    assert captured["year"] == 2024
+    assert captured["month"] == [3]
+    assert captured["group"] == "RD"
+    assert captured["as_dataframe"] is True
+
+
+def test_download_state_month_handles_empty_result(monkeypatch):
+    import pysus
+
+    monkeypatch.setattr(pysus.ftp, "sih", lambda **kwargs: pd.DataFrame())
+
+    result = DatasusClient().download_state_month(2024, 1)
+
+    assert result.empty
+
+
+def test_download_state_month_wraps_errors(monkeypatch):
+    import pysus
+
+    def boom(**kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(pysus.ftp, "sih", boom)
+
+    with pytest.raises(DatasusClientError):
+        DatasusClient().download_state_month(2024, 1)
+
+
+# --- _default_24_month_range ---
+
+
+def test_default_24_month_range_covers_24_months_ending_last_full_month(monkeypatch):
+    import datetime as datetime_module
+
+    class _FixedDate(datetime_module.date):
+        @classmethod
+        def today(cls):
+            return datetime_module.date(2026, 9, 3)
+
+    monkeypatch.setattr("ingestion.datasus.extract.date", _FixedDate)
+
+    start, end = _default_24_month_range()
+
+    assert start == (2024, 9)
+    assert end == (2026, 8)
+    assert len(_month_range(start, end)) == 24
+
+
+def test_default_24_month_range_handles_january_rollover(monkeypatch):
+    import datetime as datetime_module
+
+    class _FixedDate(datetime_module.date):
+        @classmethod
+        def today(cls):
+            return datetime_module.date(2026, 1, 15)
+
+    monkeypatch.setattr("ingestion.datasus.extract.date", _FixedDate)
+
+    start, end = _default_24_month_range()
+
+    assert start == (2024, 1)
+    assert end == (2025, 12)
+    assert len(_month_range(start, end)) == 24
