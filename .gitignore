@@ -1,0 +1,49 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# --- Environment variables / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- DuckDB ---
+*.duckdb
+*.duckdb.wal
+
+# --- dbt ---
+target/
+dbt_packages/
+logs/
+.user.yml
+
+# --- Node / Next.js frontend ---
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Ingestion data artifacts ---
+ingestion/data/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
