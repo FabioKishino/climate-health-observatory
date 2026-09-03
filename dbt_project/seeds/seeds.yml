@@ -1,0 +1,57 @@
+version: 2
+
+seeds:
+  - name: municipalities
+    description: >
+      Reference data enriching municipality IBGE codes with a name, state,
+      and coordinates. SIH-RD only carries the IBGE code
+      (`municipality_residence_code`), not a name or coordinates, so this
+      static lookup fills in the rest. Only holds Curitiba for now — add a
+      row here for every municipality added to
+      `DATASUS_MUNICIPALITY_IBGE_CODES` (see ingestion/datasus/config.py)
+      when the project expands beyond Curitiba.
+    config:
+      column_types:
+        ibge_code: varchar
+        state: varchar
+    columns:
+      - name: ibge_code
+        description: IBGE municipality code.
+        data_tests:
+          - not_null
+          - unique
+      - name: municipality_name
+        description: Municipality name.
+      - name: state
+        description: Two-letter state abbreviation.
+      - name: latitude
+        description: Municipality latitude (city centroid), in decimal degrees.
+      - name: longitude
+        description: Municipality longitude (city centroid), in decimal degrees.
+
+  - name: municipality_station_mapping
+    description: >
+      Manual geographic proximity mapping from a municipality to its
+      nearest INMET weather station, used by mart_climate_health_correlation
+      to join climate to health data. This is a deliberate simplification
+      for this phase (see docs/adr — a haversine-distance-based mapping is
+      listed as suggested future work) rather than a computed distance.
+
+      LIMITATION: the station_code for Curitiba is a placeholder ("TBD")
+      until the real INMET automatic station code for Curitiba is
+      confirmed and set in ingestion/inmet/config.py's
+      INMET_STATION_CODES — update this row to match once that's known.
+    config:
+      column_types:
+        municipality_ibge_code: varchar
+        station_code: varchar
+    columns:
+      - name: municipality_ibge_code
+        description: IBGE municipality code — see dim_location.ibge_code.
+        data_tests:
+          - not_null
+          - unique
+      - name: station_code
+        description: >
+          Nearest INMET station code — see dim_weather_station.station_code.
+          Currently a placeholder ("TBD"); see the seed-level description.

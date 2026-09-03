@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: int_datasus__admissions_enriched
+    description: >
+      Staged admissions enriched with icd_group, the ICD-10 3-character
+      diagnosis category derived from primary_diagnosis. Grain: one row
+      per admission (same as stg_datasus__admissions).
+    columns:
+      - name: aih_number
+        data_tests:
+          - not_null
+          - unique
+      - name: icd_group
+        description: >
+          ICD-10 3-character category of the primary diagnosis (e.g. "J18",
+          "J45"). Always within J00-J99 given upstream filtering.
+        data_tests:
+          - not_null

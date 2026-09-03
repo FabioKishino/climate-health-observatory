@@ -11,6 +11,10 @@ renamed as (
     select
         station_code::varchar as station_code,
         date::date as date_day,
+        station_name::varchar as station_name,
+        state::varchar as state,
+        latitude::double as latitude,
+        longitude::double as longitude,
         avg_temp::double as avg_temp,
         min_temp::double as min_temp,
         max_temp::double as max_temp,

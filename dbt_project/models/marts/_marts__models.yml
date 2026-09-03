@@ -1,0 +1,170 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: One row per calendar day, spanning 2020-01-01 through one year from today.
+    columns:
+      - name: date_day
+        description: The calendar date — primary key.
+        data_tests:
+          - not_null
+          - unique
+      - name: year
+        data_tests:
+          - not_null
+      - name: month
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      - name: day
+        data_tests:
+          - not_null
+      - name: day_of_week
+        description: Day of week, 0 (Sunday) through 6 (Saturday).
+        data_tests:
+          - not_null
+      - name: month_name
+        data_tests:
+          - not_null
+      - name: season
+        description: Southern Hemisphere meteorological season.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Summer", "Autumn", "Winter", "Spring"]
+
+  - name: dim_location
+    description: >
+      One row per municipality present in the admissions data. Currently
+      just Curitiba — see seeds/municipalities.csv to add more.
+    columns:
+      - name: ibge_code
+        description: IBGE municipality code — primary key.
+        data_tests:
+          - not_null
+          - unique
+      - name: municipality
+        description: Municipality name.
+      - name: state
+        description: Two-letter state abbreviation.
+      - name: region
+        description: >
+          Brazilian macro-region, derived from state via
+          macros/get_brazil_region.sql (not read from a static column, so
+          it stays correct if the state scope expands).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Norte", "Nordeste", "Centro-Oeste", "Sudeste", "Sul"]
+      - name: latitude
+      - name: longitude
+
+  - name: dim_weather_station
+    description: One row per INMET weather station present in the climate data.
+    columns:
+      - name: station_code
+        description: INMET automatic weather station code — primary key.
+        data_tests:
+          - not_null
+          - unique
+      - name: station_name
+      - name: state
+      - name: latitude
+      - name: longitude
+
+  - name: fct_respiratory_admissions
+    description: >
+      One row per respiratory-cause hospital admission (AIH record) for the
+      configured municipalities.
+    columns:
+      - name: aih_number
+        description: Natural key of the source admission record.
+        data_tests:
+          - not_null
+          - unique
+      - name: fk_date
+        description: Foreign key to dim_date.date_day.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_day
+      - name: fk_municipality
+        description: Foreign key to dim_location.ibge_code.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_location')
+                field: ibge_code
+      - name: admission_count
+        description: Always 1 at this grain — sum() to get admission counts at any rollup.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1]
+      - name: total_aih_value
+      - name: length_of_stay
+        data_tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+      - name: icd_group
+        data_tests:
+          - not_null
+
+  - name: fct_daily_climate
+    description: One row per weather station per day.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - fk_date
+              - fk_station
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "<= max_temp"
+            column_name: min_temp
+    columns:
+      - name: fk_date
+        description: Foreign key to dim_date.date_day.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_day
+      - name: fk_station
+        description: Foreign key to dim_weather_station.station_code.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_weather_station')
+                field: station_code
+      - name: avg_temp
+      - name: min_temp
+      - name: max_temp
+      - name: avg_relative_humidity
+      - name: total_precipitation
+
+  - name: mart_climate_health_correlation
+    description: >
+      Analysis mart joining daily climate to daily respiratory admission
+      counts via dim_date and a municipality -> nearest-station proximity
+      mapping (see seeds/municipality_station_mapping.csv). Grain: one row
+      per (date_day, station_code).
+    columns:
+      - name: date_day
+        data_tests:
+          - not_null
+      - name: daily_admission_count
+        description: Sum of admissions for the day (0, not null, when there were none).
+        data_tests:
+          - not_null

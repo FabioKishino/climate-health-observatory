@@ -21,6 +21,14 @@ models:
         description: Calendar date of the readings.
         data_tests:
           - not_null
+      - name: station_name
+        description: INMET weather station name.
+      - name: state
+        description: Two-letter state abbreviation of the station's location.
+      - name: latitude
+        description: Station latitude, in decimal degrees.
+      - name: longitude
+        description: Station longitude, in decimal degrees.
       - name: avg_temp
         description: Daily average instantaneous air temperature, in degrees Celsius.
       - name: min_temp
