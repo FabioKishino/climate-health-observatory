@@ -6,6 +6,10 @@ abbreviations, as returned by the API — kept as-is at the parsing boundary,
 translated to English at the staging layer in dbt):
 
     CD_ESTACAO   station code
+    DC_NOME      station name
+    UF           station state (two-letter abbreviation)
+    VL_LATITUDE  station latitude
+    VL_LONGITUDE station longitude
     DT_MEDICAO   measurement date ("YYYY-MM-DD")
     HR_MEDICAO   measurement hour ("HHMM", UTC)
     TEM_INS      instant air temperature (deg C)
@@ -13,6 +17,10 @@ translated to English at the staging layer in dbt):
     TEM_MIN      hourly min air temperature (deg C)
     UMD_INS      instant relative humidity (%)
     CHUVA        hourly accumulated precipitation (mm)
+
+Station metadata (name, state, coordinates) is repeated on every hourly
+record rather than served separately, so it's captured here rather than via
+a second call to INMET's station-catalog endpoint.
 
 Numeric fields are sometimes returned as `null`/empty strings when a sensor
 reading is missing — this is a normal characteristic of the source, not a
@@ -76,6 +84,10 @@ def parse_hourly_readings(
             {
                 "station_code": station_code,
                 "date": measurement_date,
+                "station_name": record.get("DC_NOME") or None,
+                "state": record.get("UF") or None,
+                "latitude": _parse_float(record.get("VL_LATITUDE")),
+                "longitude": _parse_float(record.get("VL_LONGITUDE")),
                 "temp_instant": _parse_float(record.get("TEM_INS")),
                 "temp_max": _parse_float(record.get("TEM_MAX")),
                 "temp_min": _parse_float(record.get("TEM_MIN")),
@@ -98,6 +110,10 @@ def aggregate_daily(readings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     - total_precipitation: sum of the hourly precipitation readings
       (missing hourly readings contribute 0, since no reading typically
       means no precipitation was recorded, not that the sensor failed)
+
+    Station metadata (name, state, coordinates) is constant across a
+    station's hourly readings, so it's carried forward from the first
+    reading in the group that actually has it set.
     """
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for reading in readings:
@@ -117,6 +133,10 @@ def aggregate_daily(readings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "station_code": station_code,
                 "date": measurement_date,
+                "station_name": _first_non_null(r["station_name"] for r in group),
+                "state": _first_non_null(r["state"] for r in group),
+                "latitude": _first_non_null(r["latitude"] for r in group),
+                "longitude": _first_non_null(r["longitude"] for r in group),
                 "avg_temp": _mean(temp_instants),
                 "min_temp": min(temp_mins) if temp_mins else _min_or_none(temp_instants),
                 "max_temp": max(temp_maxes) if temp_maxes else _max_or_none(temp_instants),
@@ -126,6 +146,13 @@ def aggregate_daily(readings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
 
     return daily_rows
+
+
+def _first_non_null(values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def _mean(values: list[float]) -> float | None:
@@ -161,6 +188,10 @@ def write_daily_climate_parquet(
             CREATE TABLE daily_climate (
                 station_code VARCHAR,
                 date DATE,
+                station_name VARCHAR,
+                state VARCHAR,
+                latitude DOUBLE,
+                longitude DOUBLE,
                 avg_temp DOUBLE,
                 min_temp DOUBLE,
                 max_temp DOUBLE,
@@ -172,12 +203,16 @@ def write_daily_climate_parquet(
         con.executemany(
             """
             INSERT INTO daily_climate
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     row["station_code"],
                     row["date"],
+                    row["station_name"],
+                    row["state"],
+                    row["latitude"],
+                    row["longitude"],
                     row["avg_temp"],
                     row["min_temp"],
                     row["max_temp"],

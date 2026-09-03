@@ -23,54 +23,71 @@ def _make_client(handler, **kwargs) -> InmetClient:
     return InmetClient(transport=httpx.MockTransport(handler), **kwargs)
 
 
+def _raw_hourly_record(**overrides) -> dict:
+    record = {
+        "CD_ESTACAO": STATION_CODE,
+        "DC_NOME": "CURITIBA",
+        "UF": "PR",
+        "VL_LATITUDE": "-25.42",
+        "VL_LONGITUDE": "-49.27",
+        "DT_MEDICAO": "2024-05-01",
+        "HR_MEDICAO": "1200",
+        "TEM_INS": "18,4",
+        "TEM_MAX": "19.0",
+        "TEM_MIN": "17.5",
+        "UMD_INS": "80",
+        "CHUVA": "0.2",
+    }
+    record.update(overrides)
+    return record
+
+
+def _reading(**overrides) -> dict:
+    reading = {
+        "station_code": STATION_CODE,
+        "date": "2024-05-01",
+        "station_name": "CURITIBA",
+        "state": "PR",
+        "latitude": -25.42,
+        "longitude": -49.27,
+        "temp_instant": 18.4,
+        "temp_max": 19.0,
+        "temp_min": 17.5,
+        "humidity_instant": 80.0,
+        "precipitation": 0.2,
+    }
+    reading.update(overrides)
+    return reading
+
+
 # --- parse_hourly_readings ---
 
 
 def test_parse_hourly_readings_valid():
-    raw = [
-        {
-            "CD_ESTACAO": STATION_CODE,
-            "DT_MEDICAO": "2024-05-01",
-            "HR_MEDICAO": "1200",
-            "TEM_INS": "18,4",
-            "TEM_MAX": "19.0",
-            "TEM_MIN": "17.5",
-            "UMD_INS": "80",
-            "CHUVA": "0.2",
-        }
-    ]
+    parsed = parse_hourly_readings([_raw_hourly_record()], STATION_CODE)
 
-    parsed = parse_hourly_readings(raw, STATION_CODE)
-
-    assert parsed == [
-        {
-            "station_code": STATION_CODE,
-            "date": "2024-05-01",
-            "temp_instant": 18.4,
-            "temp_max": 19.0,
-            "temp_min": 17.5,
-            "humidity_instant": 80.0,
-            "precipitation": 0.2,
-        }
-    ]
+    assert parsed == [_reading()]
 
 
 def test_parse_hourly_readings_handles_missing_values():
     raw = [
-        {
-            "CD_ESTACAO": STATION_CODE,
-            "DT_MEDICAO": "2024-05-01",
-            "HR_MEDICAO": "1300",
-            "TEM_INS": None,
-            "TEM_MAX": "",
-            "TEM_MIN": None,
-            "UMD_INS": None,
-            "CHUVA": None,
-        }
+        _raw_hourly_record(
+            DC_NOME=None,
+            UF=None,
+            VL_LATITUDE=None,
+            VL_LONGITUDE=None,
+            TEM_INS=None,
+            TEM_MAX="",
+            TEM_MIN=None,
+            UMD_INS=None,
+            CHUVA=None,
+        )
     ]
 
     parsed = parse_hourly_readings(raw, STATION_CODE)
 
+    assert parsed[0]["station_name"] is None
+    assert parsed[0]["latitude"] is None
     assert parsed[0]["temp_instant"] is None
     assert parsed[0]["temp_max"] is None
     assert parsed[0]["precipitation"] is None
@@ -105,30 +122,18 @@ def test_parse_float_returns_none_for_unparseable_string():
 
 def test_aggregate_daily_computes_expected_metrics():
     readings = [
-        {
-            "station_code": STATION_CODE,
-            "date": "2024-05-01",
-            "temp_instant": 15.0,
-            "temp_max": 20.0,
-            "temp_min": 10.0,
-            "humidity_instant": 70.0,
-            "precipitation": 1.0,
-        },
-        {
-            "station_code": STATION_CODE,
-            "date": "2024-05-01",
-            "temp_instant": 25.0,
-            "temp_max": 26.0,
-            "temp_min": 12.0,
-            "humidity_instant": 90.0,
-            "precipitation": None,
-        },
+        _reading(temp_instant=15.0, temp_max=20.0, temp_min=10.0, humidity_instant=70.0, precipitation=1.0),
+        _reading(temp_instant=25.0, temp_max=26.0, temp_min=12.0, humidity_instant=90.0, precipitation=None),
     ]
 
     [daily] = aggregate_daily(readings)
 
     assert daily["station_code"] == STATION_CODE
     assert daily["date"] == "2024-05-01"
+    assert daily["station_name"] == "CURITIBA"
+    assert daily["state"] == "PR"
+    assert daily["latitude"] == -25.42
+    assert daily["longitude"] == -49.27
     assert daily["avg_temp"] == 20.0
     assert daily["min_temp"] == 10.0
     assert daily["max_temp"] == 26.0
@@ -136,26 +141,24 @@ def test_aggregate_daily_computes_expected_metrics():
     assert daily["total_precipitation"] == 1.0
 
 
+def test_aggregate_daily_carries_forward_metadata_from_a_later_reading_if_first_is_missing_it():
+    readings = [
+        _reading(station_name=None, state=None, latitude=None, longitude=None),
+        _reading(station_name="CURITIBA", state="PR", latitude=-25.42, longitude=-49.27),
+    ]
+
+    [daily] = aggregate_daily(readings)
+
+    assert daily["station_name"] == "CURITIBA"
+    assert daily["latitude"] == -25.42
+
+
 def test_aggregate_daily_falls_back_to_instant_temp_when_min_max_missing():
     readings = [
-        {
-            "station_code": STATION_CODE,
-            "date": "2024-05-02",
-            "temp_instant": 12.0,
-            "temp_max": None,
-            "temp_min": None,
-            "humidity_instant": None,
-            "precipitation": None,
-        },
-        {
-            "station_code": STATION_CODE,
-            "date": "2024-05-02",
-            "temp_instant": 18.0,
-            "temp_max": None,
-            "temp_min": None,
-            "humidity_instant": None,
-            "precipitation": None,
-        },
+        _reading(date="2024-05-02", temp_instant=12.0, temp_max=None, temp_min=None,
+                  humidity_instant=None, precipitation=None),
+        _reading(date="2024-05-02", temp_instant=18.0, temp_max=None, temp_min=None,
+                  humidity_instant=None, precipitation=None),
     ]
 
     [daily] = aggregate_daily(readings)
@@ -168,24 +171,8 @@ def test_aggregate_daily_falls_back_to_instant_temp_when_min_max_missing():
 
 def test_aggregate_daily_groups_by_station_and_date():
     readings = [
-        {
-            "station_code": "A807",
-            "date": "2024-05-01",
-            "temp_instant": 10.0,
-            "temp_max": 10.0,
-            "temp_min": 10.0,
-            "humidity_instant": 50.0,
-            "precipitation": 0.0,
-        },
-        {
-            "station_code": "A999",
-            "date": "2024-05-01",
-            "temp_instant": 30.0,
-            "temp_max": 30.0,
-            "temp_min": 30.0,
-            "humidity_instant": 50.0,
-            "precipitation": 0.0,
-        },
+        _reading(station_code="A807", temp_instant=10.0, temp_max=10.0, temp_min=10.0),
+        _reading(station_code="A999", temp_instant=30.0, temp_max=30.0, temp_min=30.0),
     ]
 
     daily = aggregate_daily(readings)
@@ -341,6 +328,10 @@ def test_write_daily_climate_parquet_writes_partitioned_and_idempotent(tmp_path)
         {
             "station_code": STATION_CODE,
             "date": "2024-05-01",
+            "station_name": "CURITIBA",
+            "state": "PR",
+            "latitude": -25.42,
+            "longitude": -49.27,
             "avg_temp": 18.0,
             "min_temp": 12.0,
             "max_temp": 24.0,
@@ -356,9 +347,9 @@ def test_write_daily_climate_parquet_writes_partitioned_and_idempotent(tmp_path)
     assert list(tmp_path.glob("date=2024-05-01/*.parquet"))
 
     result = duckdb.connect().execute(
-        f"SELECT station_code, avg_temp FROM read_parquet('{tmp_path.as_posix()}/**/*.parquet')"
+        f"SELECT station_code, station_name, avg_temp FROM read_parquet('{tmp_path.as_posix()}/**/*.parquet')"
     ).fetchall()
-    assert result == [(STATION_CODE, 18.0)]
+    assert result == [(STATION_CODE, "CURITIBA", 18.0)]
 
 
 def test_write_daily_climate_parquet_handles_empty_rows(tmp_path):
@@ -387,6 +378,10 @@ def test_extract_daily_climate_orchestrates_fetch_aggregate_and_write(monkeypatc
         "A807": [
             {
                 "CD_ESTACAO": "A807",
+                "DC_NOME": "CURITIBA",
+                "UF": "PR",
+                "VL_LATITUDE": "-25.42",
+                "VL_LONGITUDE": "-49.27",
                 "DT_MEDICAO": "2024-05-01",
                 "TEM_INS": "20.0",
                 "TEM_MAX": "25.0",
@@ -409,7 +404,14 @@ def test_extract_daily_climate_orchestrates_fetch_aggregate_and_write(monkeypatc
     )
 
     assert row_count == 1
-    assert list(tmp_path.glob("date=2024-05-01/*.parquet"))
+    [parquet_file] = tmp_path.glob("date=2024-05-01/*.parquet")
+
+    import duckdb
+
+    result = duckdb.connect().execute(
+        f"SELECT station_name, latitude FROM read_parquet('{parquet_file.as_posix()}')"
+    ).fetchall()
+    assert result == [("CURITIBA", -25.42)]
 
 
 def test_extract_daily_climate_raises_without_station_codes(tmp_path):
