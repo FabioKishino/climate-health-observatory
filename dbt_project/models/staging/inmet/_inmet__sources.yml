@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: inmet
+    description: >
+      Raw daily climate data extracted from INMET's automatic weather
+      station API by ingestion/inmet/extract.py, written as Hive-partitioned
+      Parquet files (partitioned by `date`) under ingestion/data/raw/inmet/.
+      Populated by the ingestion layer, not by dbt — dbt reads these files
+      directly via DuckDB's `read_parquet`, they are never loaded into a
+      staging table first.
+    tables:
+      - name: daily_climate
+        description: One row per weather station per day.
+        config:
+          external_location: "read_parquet('{{ var('inmet_raw_data_glob') }}', hive_partitioning=true)"
+          formatter: oldstyle

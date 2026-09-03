@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: datasus
+    description: >
+      Raw SIH-RD hospital admission records extracted from DataSUS by
+      ingestion/datasus/extract.py, already filtered to the configured
+      municipalities and respiratory ICD-10 diagnoses (J00-J99), written as
+      Hive-partitioned Parquet files (partitioned by `admission_month`)
+      under ingestion/data/raw/datasus/. Note SIH's ~2 month publication
+      lag — see ingestion/datasus/extract.py's module docstring.
+    tables:
+      - name: admissions
+        description: One row per hospital admission (AIH record).
+        config:
+          external_location: "read_parquet('{{ var('datasus_raw_data_glob') }}', hive_partitioning=true)"
+          formatter: oldstyle

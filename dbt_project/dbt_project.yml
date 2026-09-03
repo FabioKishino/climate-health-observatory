@@ -1,0 +1,32 @@
+name: "climate_health_observatory"
+version: "1.0.0"
+config-version: 2
+
+profile: "climate_health_observatory"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Relative to the dbt_project/ directory, i.e. dbt commands are expected to
+# run with dbt_project/ as the working directory (see README "Running
+# locally"). Overridable via `--vars` for alternate layouts (e.g. CI).
+vars:
+  inmet_raw_data_glob: "../ingestion/data/raw/inmet/**/*.parquet"
+  datasus_raw_data_glob: "../ingestion/data/raw/datasus/**/*.parquet"
+
+models:
+  climate_health_observatory:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table

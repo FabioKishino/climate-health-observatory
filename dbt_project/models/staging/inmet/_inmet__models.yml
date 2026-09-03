@@ -1,0 +1,33 @@
+version: 2
+
+models:
+  - name: stg_inmet__daily_climate
+    description: >
+      Staged daily climate readings per weather station, sourced from
+      INMET's automatic weather station API. Grain: one row per
+      (station_code, date_day).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - station_code
+              - date_day
+    columns:
+      - name: station_code
+        description: INMET automatic weather station code.
+        data_tests:
+          - not_null
+      - name: date_day
+        description: Calendar date of the readings.
+        data_tests:
+          - not_null
+      - name: avg_temp
+        description: Daily average instantaneous air temperature, in degrees Celsius.
+      - name: min_temp
+        description: Daily minimum air temperature, in degrees Celsius.
+      - name: max_temp
+        description: Daily maximum air temperature, in degrees Celsius.
+      - name: avg_relative_humidity
+        description: Daily average instantaneous relative humidity, in percent.
+      - name: total_precipitation
+        description: Total accumulated precipitation for the day, in millimeters.

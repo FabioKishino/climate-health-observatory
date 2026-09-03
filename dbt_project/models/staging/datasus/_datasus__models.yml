@@ -1,0 +1,41 @@
+version: 2
+
+models:
+  - name: stg_datasus__admissions
+    description: >
+      Staged SIH-RD hospital admission records for the configured
+      municipalities and respiratory ICD-10 diagnoses. Grain: one row per
+      admission (AIH record).
+    columns:
+      - name: aih_number
+        description: >
+          AIH (Authorization for Hospital Admission) record number — the
+          natural key of this table.
+        data_tests:
+          - not_null
+          - unique
+      - name: municipality_residence_code
+        description: IBGE code of the patient's municipality of residence.
+        data_tests:
+          - not_null
+      - name: admission_date
+        description: Date the patient was admitted to the hospital.
+        data_tests:
+          - not_null
+      - name: primary_diagnosis
+        description: >
+          Primary diagnosis ICD-10 code. Restricted to the respiratory
+          disease chapter (J00-J99) by ingestion-time filtering — since the
+          full J00-J99 range is too large a set for `accepted_values`, the
+          expression_is_true test below instead guards against a future
+          ingestion regression silently letting non-respiratory codes
+          through.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "like 'J%'"
+      - name: total_aih_value
+        description: Total value (in BRL) authorized for the admission.
+      - name: length_of_stay
+        description: Length of the hospital stay, in days.

@@ -1,0 +1,30 @@
+# dbt looks for profiles.yml in `--profiles-dir` (or $DBT_PROFILES_DIR, or
+# ~/.dbt/ by default). This project keeps it alongside dbt_project.yml so
+# `cd dbt_project && dbt run` works out of the box with no machine-level
+# setup — pass `--profiles-dir .` (or set DBT_PROFILES_DIR=.) explicitly if
+# your dbt install still checks ~/.dbt/ first.
+#
+# No secrets are stored here: MOTHERDUCK_TOKEN is read from the environment
+# via env_var() at run time (see .env.example / GitHub Secrets).
+climate_health_observatory:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    # Local development: a DuckDB file on disk, populated by `dbt build`
+    # reading directly from the ingestion layer's Parquet output.
+    dev:
+      type: duckdb
+      path: "local.duckdb"
+      threads: 4
+
+    # CI: an in-memory database, so `dbt build` in a GitHub Actions runner
+    # never touches MotherDuck and needs no credentials.
+    ci:
+      type: duckdb
+      path: ":memory:"
+      threads: 4
+
+    # Production: MotherDuck-hosted DuckDB (see docs/adr/0001).
+    prod:
+      type: duckdb
+      path: "md:climate_health_observatory?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      threads: 4
