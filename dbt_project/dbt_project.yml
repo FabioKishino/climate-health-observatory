@@ -30,3 +30,7 @@ models:
       +materialized: view
     marts:
       +materialized: table
+  # No custom +schema for elementary: dbt-duckdb's custom-schema naming
+  # convention prefixes it (e.g. "main_elementary"), but `edr` looks for
+  # Elementary's tables directly under the target's default schema — kept
+  # in the same schema as everything else so `edr report` finds them.

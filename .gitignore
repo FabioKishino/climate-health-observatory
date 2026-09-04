@@ -31,6 +31,10 @@ dbt_packages/
 logs/
 .user.yml
 
+# --- Elementary ---
+edr_target/
+.edr/
+
 # --- Node / Next.js frontend ---
 node_modules/
 .next/

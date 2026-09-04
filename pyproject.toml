@@ -16,6 +16,7 @@ duckdb = "^1.0"
 dbt-core = "^1.8"
 dbt-duckdb = "^1.8"
 python-dotenv = "^1.0"
+elementary-data = {version = "^0.25", extras = ["duckdb"]}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
@@ -26,4 +27,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["ingestion/tests"]
+testpaths = ["ingestion/tests", "scripts/tests"]

@@ -13,7 +13,7 @@ climate_health_observatory:
     # reading directly from the ingestion layer's Parquet output.
     dev:
       type: duckdb
-      path: "local.duckdb"
+      path: "{{ env_var('PWD') }}/local.duckdb"
       threads: 4
 
     # CI: an in-memory database, so `dbt build` in a GitHub Actions runner
@@ -24,6 +24,27 @@ climate_health_observatory:
       threads: 4
 
     # Production: MotherDuck-hosted DuckDB (see docs/adr/0001).
+    prod:
+      type: duckdb
+      path: "md:climate_health_observatory?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"
+      threads: 4
+
+# `edr` (the Elementary CLI) looks for a profile literally named
+# "elementary" — this must point at the exact same database as the
+# `climate_health_observatory` profile above (matching target-by-target),
+# since it reads the elementary.* tables that `dbt build` just wrote there.
+# Not a separate warehouse — see docs/adr/0003.
+elementary:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('PWD') }}/local.duckdb"
+      threads: 4
+    ci:
+      type: duckdb
+      path: ":memory:"
+      threads: 4
     prod:
       type: duckdb
       path: "md:climate_health_observatory?motherduck_token={{ env_var('MOTHERDUCK_TOKEN') }}"

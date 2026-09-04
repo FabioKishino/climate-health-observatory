@@ -211,4 +211,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Run as a module from the repo root (`python -m ingestion.datasus.extract`),
+    # not as a bare script path — the absolute `ingestion.*` imports above
+    # only resolve when the repo root is on sys.path, which `-m` guarantees
+    # and a direct `python ingestion/datasus/extract.py` invocation does not.
     main()
