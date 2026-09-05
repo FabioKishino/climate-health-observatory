@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 import httpx
 import pytest
 
@@ -363,7 +365,7 @@ class _FakeInmetClient:
     def __init__(self, responses: dict[str, list[dict]]) -> None:
         self._responses = responses
 
-    def __enter__(self) -> "_FakeInmetClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -428,9 +430,9 @@ def test_extract_daily_climate_raises_without_station_codes(tmp_path):
 
 
 def test_default_date_range_is_yesterday():
-    from datetime import date, timedelta
+    from datetime import UTC, datetime, timedelta
 
     start, end = _default_date_range()
-    expected = (date.today() - timedelta(days=1)).isoformat()
+    expected = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
 
     assert start == end == expected

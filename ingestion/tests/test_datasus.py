@@ -256,12 +256,12 @@ def test_download_state_month_wraps_errors(monkeypatch):
 def test_default_24_month_range_covers_24_months_ending_last_full_month(monkeypatch):
     import datetime as datetime_module
 
-    class _FixedDate(datetime_module.date):
+    class _FixedDatetime(datetime_module.datetime):
         @classmethod
-        def today(cls):
-            return datetime_module.date(2026, 9, 3)
+        def now(cls, tz=None):
+            return datetime_module.datetime(2026, 9, 3, tzinfo=tz)
 
-    monkeypatch.setattr("ingestion.datasus.extract.date", _FixedDate)
+    monkeypatch.setattr("ingestion.datasus.extract.datetime", _FixedDatetime)
 
     start, end = _default_24_month_range()
 
@@ -273,12 +273,12 @@ def test_default_24_month_range_covers_24_months_ending_last_full_month(monkeypa
 def test_default_24_month_range_handles_january_rollover(monkeypatch):
     import datetime as datetime_module
 
-    class _FixedDate(datetime_module.date):
+    class _FixedDatetime(datetime_module.datetime):
         @classmethod
-        def today(cls):
-            return datetime_module.date(2026, 1, 15)
+        def now(cls, tz=None):
+            return datetime_module.datetime(2026, 1, 15, tzinfo=tz)
 
-    monkeypatch.setattr("ingestion.datasus.extract.date", _FixedDate)
+    monkeypatch.setattr("ingestion.datasus.extract.datetime", _FixedDatetime)
 
     start, end = _default_24_month_range()
 

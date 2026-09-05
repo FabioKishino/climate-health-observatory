@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -51,7 +51,7 @@ class InmetClient:
         self.max_backoff = max_backoff
         self._client = httpx.Client(timeout=timeout, transport=transport)
 
-    def __enter__(self) -> "InmetClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

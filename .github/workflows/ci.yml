@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    name: Lint and unit test (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Configure Poetry to use an in-project virtualenv
+        run: poetry config virtualenvs.in-project true
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Lint (ruff)
+        run: poetry run ruff check .
+
+      - name: Unit tests
+        run: poetry run pytest
+
+  validate-dbt-project:
+    name: Validate dbt project (parse + compile, no warehouse execution)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: dbt deps
+        working-directory: dbt_project
+        run: poetry run dbt deps --profiles-dir .
+
+      - name: dbt parse
+        working-directory: dbt_project
+        env:
+          DBT_TARGET: ci
+        run: poetry run dbt parse --profiles-dir .
+
+      - name: dbt compile
+        working-directory: dbt_project
+        env:
+          DBT_TARGET: ci
+        run: poetry run dbt compile --profiles-dir .

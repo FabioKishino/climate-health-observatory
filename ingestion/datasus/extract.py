@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 import re
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
 
 import duckdb
@@ -180,8 +180,10 @@ def _month_range(
 
 def _default_24_month_range() -> tuple[tuple[int, int], tuple[int, int]]:
     """Defaults to the 24 months ending with the most recent fully-elapsed
-    calendar month."""
-    today = date.today()
+    calendar month. Uses UTC to avoid depending on the local system's
+    timezone (immaterial at month granularity given SIH's own ~2-month lag).
+    """
+    today = datetime.now(UTC).date()
     end_year, end_month = today.year, today.month - 1
     if end_month == 0:
         end_year, end_month = end_year - 1, 12

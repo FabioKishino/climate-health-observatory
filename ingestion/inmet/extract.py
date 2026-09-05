@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -284,8 +284,13 @@ def extract_daily_climate(
 
 
 def _default_date_range() -> tuple[str, str]:
-    """Defaults to yesterday only, matching INMET's ~1-day publication lag."""
-    yesterday = date.today() - timedelta(days=1)
+    """Defaults to yesterday only, matching INMET's ~1-day publication lag.
+
+    Uses UTC (not the system's local timezone) to avoid ambiguity depending
+    on where this runs — this doesn't attempt full Brasilia-calendar-day
+    precision, which is unnecessary given INMET's own day-scale lag.
+    """
+    yesterday = datetime.now(UTC).date() - timedelta(days=1)
     return yesterday.isoformat(), yesterday.isoformat()
 
 

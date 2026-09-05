@@ -1,0 +1,157 @@
+# Two independent schedules in this one workflow, not one:
+#
+# - INMET (climate) publishes the previous day's data with roughly a
+#   1-day lag, so `ingest-and-transform` runs daily, early enough in the
+#   morning (09:00 UTC = 06:00 America/Sao_Paulo) to give INMET's systems
+#   several hours past midnight local time to finish publishing.
+# - DataSUS/SIH-RD (admissions) has a ~2-month publication lag (see
+#   ingestion/datasus/extract.py's module docstring) — re-running it daily
+#   would mostly re-download data that hasn't changed. `ingest-datasus`
+#   therefore runs weekly (Monday, 08:00 UTC — an hour before the daily
+#   job, and a different minute/hour than the daily cron so the two never
+#   fire as the same run).
+#
+# These two jobs do NOT depend on each other (no `needs:`, no artifact
+# passing) — deliberately, per docs/adr/0002 (this pipeline's dependency
+# graph is meant to stay simple, not grow orchestrator-shaped coordination
+# just to link two jobs). Instead they're coupled only through a GitHub
+# Actions cache slot: `ingest-datasus` saves its freshly-ingested Parquet
+# under a cache key; `ingest-and-transform` restores whatever was most
+# recently saved there (via `restore-keys`, which falls back to the newest
+# match) before running `dbt build`. On non-Monday days this picks up last
+# Monday's data; on a Monday it's a coin flip whether that day's own run
+# has finished saving before the daily job restores — utterly immaterial
+# given DataSUS's own 2-month lag already makes a same-day mismatch
+# irrelevant. dbt build reads Parquet from disk (see dbt_project/models/
+# staging/*/. _sources.yml), which is why any persistence across runs has
+# to go through an explicit mechanism like this rather than "just being
+# there" — GitHub Actions runners are single-use.
+#
+# KNOWN BOOTSTRAP LIMITATION: until `ingest-datasus` has succeeded at
+# least once, no DataSUS cache exists, and `dbt build` will fail outright
+# on stg_datasus__admissions (DuckDB errors on a Parquet glob matching zero
+# files, rather than returning empty results — verified deliberately
+# during development). The manual `workflow_dispatch` trigger defaults
+# `force_datasus` to true for exactly this reason: the natural first manual
+# run seeds it.
+
+name: Daily Pipeline
+
+on:
+  schedule:
+    - cron: "0 9 * * *"  # daily: INMET ingestion + dbt build + observability
+    - cron: "0 8 * * 1"  # weekly (Monday): DataSUS ingestion only
+  workflow_dispatch:
+    inputs:
+      force_datasus:
+        description: "Also run DataSUS ingestion on this manual run"
+        type: boolean
+        default: true
+
+jobs:
+  ingest-datasus:
+    name: Ingest DataSUS/SIH-RD (weekly)
+    if: github.event.schedule == '0 8 * * 1' || (github.event_name == 'workflow_dispatch' && inputs.force_datasus == true)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Run DataSUS ingestion
+        run: poetry run python -m ingestion.datasus.extract
+
+      - name: Save DataSUS raw data to cache
+        uses: actions/cache/save@v4
+        with:
+          path: ingestion/data/raw/datasus
+          key: datasus-raw-data-${{ github.run_id }}
+
+      - name: Notify Telegram on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: >
+          poetry run python scripts/notify_telegram.py
+          --status failure
+          --message "DataSUS/SIH-RD ingestion failed."
+
+  ingest-and-transform:
+    name: Ingest INMET, run dbt build, report
+    if: github.event.schedule == '0 9 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Run INMET ingestion
+        run: poetry run python -m ingestion.inmet.extract
+
+      - name: Restore last known DataSUS raw data
+        uses: actions/cache/restore@v4
+        with:
+          path: ingestion/data/raw/datasus
+          key: datasus-raw-data-${{ github.run_id }}
+          restore-keys: |
+            datasus-raw-data-
+
+      - name: dbt deps
+        working-directory: dbt_project
+        run: poetry run dbt deps --profiles-dir .
+
+      - name: dbt build
+        working-directory: dbt_project
+        env:
+          DBT_TARGET: prod
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+        run: poetry run dbt build --profiles-dir .
+
+      - name: Generate Elementary report
+        working-directory: dbt_project
+        env:
+          DBT_TARGET: prod
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+        run: poetry run edr report --profiles-dir . --project-dir . --open-browser false
+
+      - name: Upload Elementary report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: elementary-report
+          path: dbt_project/edr_target/elementary_report.html
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Ping healthchecks.io on success
+        if: success()
+        env:
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: poetry run python scripts/ping_healthcheck.py
+
+      - name: Notify Telegram on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: >
+          poetry run python scripts/notify_telegram.py
+          --status failure
+          --message "Daily pipeline failed (INMET ingestion / dbt build / Elementary report)."

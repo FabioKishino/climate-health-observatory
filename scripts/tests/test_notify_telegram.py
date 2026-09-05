@@ -7,7 +7,6 @@ import pytest
 
 from scripts.notify_telegram import build_message, main, send_telegram_message
 
-
 # --- build_message ---
 
 
