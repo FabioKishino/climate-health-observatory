@@ -17,13 +17,13 @@ BACKOFF_FACTOR_SECONDS = float(os.getenv("INMET_BACKOFF_FACTOR_SECONDS", "1"))
 MAX_BACKOFF_SECONDS = float(os.getenv("INMET_MAX_BACKOFF_SECONDS", "60"))
 
 # --- Stations ---
-# Curitiba's INMET automatic weather station code(s) — to be confirmed and
-# filled in once identified (candidates include A807 - Curitiba). Provided
-# as a comma-separated env var so it's trivial to add more stations later
-# (e.g. to cover the Curitiba Metropolitan Region) without a code change.
+# A807 is Curitiba's INMET automatic weather station. Kept as a
+# comma-separated, overridable default (not hardcoded inline) so it's
+# trivial to add more stations later (e.g. to cover the Curitiba
+# Metropolitan Region) without a code change.
 STATION_CODES: list[str] = [
     code.strip()
-    for code in os.getenv("INMET_STATION_CODES", "").split(",")
+    for code in os.getenv("INMET_STATION_CODES", "A807").split(",")
     if code.strip()
 ]
 

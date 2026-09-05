@@ -36,11 +36,8 @@ seeds:
       to join climate to health data. This is a deliberate simplification
       for this phase (see docs/adr — a haversine-distance-based mapping is
       listed as suggested future work) rather than a computed distance.
-
-      LIMITATION: the station_code for Curitiba is a placeholder ("TBD")
-      until the real INMET automatic station code for Curitiba is
-      confirmed and set in ingestion/inmet/config.py's
-      INMET_STATION_CODES — update this row to match once that's known.
+      Curitiba maps to station A807, matching
+      ingestion/inmet/config.py's INMET_STATION_CODES default.
     config:
       column_types:
         municipality_ibge_code: varchar
@@ -52,6 +49,4 @@ seeds:
           - not_null
           - unique
       - name: station_code
-        description: >
-          Nearest INMET station code — see dim_weather_station.station_code.
-          Currently a placeholder ("TBD"); see the seed-level description.
+        description: Nearest INMET station code — see dim_weather_station.station_code.
