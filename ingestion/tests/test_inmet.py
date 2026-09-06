@@ -210,6 +210,20 @@ def test_client_handles_empty_response():
     assert result == []
 
 
+def test_client_handles_204_no_content():
+    """The real API returns 204 (empty body), not a 200 with an empty
+    array, when there's no data for the requested period — confirmed by
+    actually hitting the live API from a real GitHub Actions run."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204)
+
+    client = _make_client(handler)
+    result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
+
+    assert result == []
+
+
 def test_client_raises_on_non_retryable_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "station not found"})

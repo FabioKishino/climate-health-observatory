@@ -80,10 +80,14 @@ class InmetClient:
         """Fetches hourly readings for a station between two dates (inclusive).
 
         Dates must be in "YYYY-MM-DD" format, matching the API's contract.
-        Returns an empty list if the API returns no readings for the period.
+        Returns an empty list if the API returns no readings for the period
+        — confirmed against the real API to arrive as an HTTP 204 (No
+        Content, empty body) rather than a 200 with an empty JSON array.
         """
         url = f"{self.base_url}/estacao/{start_date}/{end_date}/{station_code}"
         response = self._request_with_retry(url, station_code=station_code)
+        if response.status_code == 204:
+            return []
         data = response.json()
         return data or []
 
@@ -102,7 +106,7 @@ class InmetClient:
                 self._sleep_before_retry(attempt)
                 continue
 
-            if response.status_code == 200:
+            if response.status_code in (200, 204):
                 return response
 
             if response.status_code not in _RETRYABLE_STATUS_CODES:
