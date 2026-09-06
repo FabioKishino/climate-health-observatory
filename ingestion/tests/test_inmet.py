@@ -502,10 +502,11 @@ def test_extract_daily_climate_raises_without_station_codes(tmp_path):
 # --- _default_date_range ---
 
 
-def test_default_date_range_is_yesterday():
+def test_default_date_range_is_a_trailing_10_day_window_ending_yesterday():
     from datetime import UTC, datetime, timedelta
 
     start, end = _default_date_range()
-    expected = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    today = datetime.now(UTC).date()
 
-    assert start == end == expected
+    assert end == (today - timedelta(days=1)).isoformat()
+    assert start == (today - timedelta(days=10)).isoformat()

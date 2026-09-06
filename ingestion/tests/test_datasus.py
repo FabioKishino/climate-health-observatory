@@ -12,6 +12,7 @@ import pytest
 from ingestion.datasus.client import DatasusClient, DatasusClientError
 from ingestion.datasus.extract import (
     _default_24_month_range,
+    _drop_duplicate_admissions,
     _month_range,
     extract_respiratory_admissions,
     filter_by_municipality,
@@ -120,6 +121,35 @@ def test_select_and_rename_columns_handles_empty_dataframe():
     assert "admission_date" in result.columns
 
 
+# --- _drop_duplicate_admissions ---
+
+
+def test_drop_duplicate_admissions_keeps_last_occurrence():
+    """Real SIH-RD data confirmed to contain the same N_AIH resubmitted
+    across competences (~0.04% of a real 24-month Curitiba extract) — kept
+    as the last (most recently processed) occurrence."""
+    df = pd.DataFrame(
+        [
+            _raw_admission(n_aih="1", diag_princ="J189"),
+            _raw_admission(n_aih="2", diag_princ="J449"),
+            _raw_admission(n_aih="1", diag_princ="J189"),  # resubmitted in a later competence
+        ]
+    )
+
+    result = _drop_duplicate_admissions(df)
+
+    assert sorted(result["N_AIH"]) == ["1", "2"]
+    assert len(result) == 2
+
+
+def test_drop_duplicate_admissions_handles_no_duplicates():
+    df = pd.DataFrame([_raw_admission(n_aih="1"), _raw_admission(n_aih="2")])
+
+    result = _drop_duplicate_admissions(df)
+
+    assert len(result) == 2
+
+
 # --- _month_range ---
 
 
@@ -177,6 +207,30 @@ def test_extract_respiratory_admissions_filters_and_combines_months(monkeypatch,
         f"SELECT aih_number FROM read_parquet('{tmp_path.as_posix()}/**/*.parquet')"
     ).fetchall()
     assert result == [("1",)]
+
+
+def test_extract_respiratory_admissions_deduplicates_across_competences(monkeypatch, tmp_path):
+    """A real characteristic of SIH-RD: the same admission can be
+    resubmitted and appear again in a later competence's file."""
+    responses = {
+        (2024, 1): pd.DataFrame(
+            [_raw_admission(munic_res=CURITIBA_CODE, diag_princ="J189", n_aih="1")]
+        ),
+        (2024, 2): pd.DataFrame(
+            [_raw_admission(munic_res=CURITIBA_CODE, diag_princ="J189", n_aih="1")]
+        ),
+    }
+    monkeypatch.setattr(
+        DatasusClient, "download_state_month", lambda self, year, month: responses.get((year, month), pd.DataFrame())
+    )
+
+    row_count = extract_respiratory_admissions(
+        start_year_month=(2024, 1),
+        end_year_month=(2024, 2),
+        output_dir=tmp_path,
+    )
+
+    assert row_count == 1
 
 
 def test_extract_respiratory_admissions_handles_no_matching_data(monkeypatch, tmp_path):

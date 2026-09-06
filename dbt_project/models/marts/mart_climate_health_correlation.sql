@@ -13,7 +13,7 @@
 -- A full outer join is used so a day shows up here whether it has climate
 -- data, admission data, or (eventually, in the steady state) both —
 -- exactly the sparse-data shape you'd expect from DataSUS's ~2-month
--- publication lag versus INMET's ~1-day lag.
+-- publication lag versus INMET's several-day lag (see docs/adr/0005).
 
 with daily_admissions as (
     select

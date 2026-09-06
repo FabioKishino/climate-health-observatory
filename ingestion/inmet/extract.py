@@ -283,15 +283,32 @@ def extract_daily_climate(
     return write_daily_climate_parquet(daily_rows, output_dir=output_dir)
 
 
+_DEFAULT_LOOKBACK_DAYS = 10
+
+
 def _default_date_range() -> tuple[str, str]:
-    """Defaults to yesterday only, matching INMET's ~1-day publication lag.
+    """Defaults to a trailing 10-day window, not just yesterday.
+
+    INMET's bulk archive (see docs/adr/0005) lags by several days in
+    practice — confirmed directly, a request for just "yesterday" often
+    returns zero rows, which would otherwise crash dbt build daily (an
+    empty Parquet glob is a hard error, not an empty result — see
+    ingestion/datasus/extract.py's module docstring for the same
+    characteristic on that side). A wider trailing window all but
+    guarantees at least the older end of it has data, and since
+    write_daily_climate_parquet overwrites per-date partitions, re-running
+    it for already-covered recent dates is a no-op refresh, not a
+    duplication risk — it also self-heals any date whose data wasn't yet
+    published on the day it was first requested.
 
     Uses UTC (not the system's local timezone) to avoid ambiguity depending
     on where this runs — this doesn't attempt full Brasilia-calendar-day
-    precision, which is unnecessary given INMET's own day-scale lag.
+    precision, which is unnecessary at this granularity.
     """
-    yesterday = datetime.now(UTC).date() - timedelta(days=1)
-    return yesterday.isoformat(), yesterday.isoformat()
+    today = datetime.now(UTC).date()
+    start = today - timedelta(days=_DEFAULT_LOOKBACK_DAYS)
+    end = today - timedelta(days=1)
+    return start.isoformat(), end.isoformat()
 
 
 def main() -> None:

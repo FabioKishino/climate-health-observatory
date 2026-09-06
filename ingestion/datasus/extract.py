@@ -160,8 +160,27 @@ def extract_respiratory_admissions(
         return write_admissions_parquet(pd.DataFrame(), output_dir=output_dir)
 
     combined = pd.concat(filtered_frames, ignore_index=True)
-    admissions = select_and_rename_columns(combined)
+    deduplicated = _drop_duplicate_admissions(combined)
+    admissions = select_and_rename_columns(deduplicated)
     return write_admissions_parquet(admissions, output_dir=output_dir)
+
+
+def _drop_duplicate_admissions(df: pd.DataFrame) -> pd.DataFrame:
+    """Drops duplicate AIH records sharing the same N_AIH.
+
+    SIH-RD legitimately contains the same admission record more than once
+    across (or occasionally within) competence files — confirmed against
+    real data, where reprocessing/resubmission of long-stay or corrected
+    admissions produced exact-duplicate N_AIH values in ~0.04% of records.
+    Competences are processed in chronological order (see _month_range),
+    so keeping the last occurrence keeps the most recently reprocessed
+    version of each admission.
+    """
+    deduplicated = df.drop_duplicates(subset="N_AIH", keep="last")
+    dropped = len(df) - len(deduplicated)
+    if dropped:
+        logger.info("Dropped duplicate AIH records", extra={"dropped_count": dropped})
+    return deduplicated
 
 
 def _month_range(

@@ -1,9 +1,13 @@
 # Two independent schedules in this one workflow, not one:
 #
-# - INMET (climate) publishes the previous day's data with roughly a
-#   1-day lag, so `ingest-and-transform` runs daily, early enough in the
-#   morning (09:00 UTC = 06:00 America/Sao_Paulo) to give INMET's systems
-#   several hours past midnight local time to finish publishing.
+# - INMET (climate) publishes its bulk archive with a lag of several days
+#   in practice (see docs/adr/0005) — ingestion requests a trailing 10-day
+#   window each run (see ingestion/inmet/extract.py's _default_date_range)
+#   specifically so a run always has a good chance of finding newly
+#   available data, self-healing any date that wasn't ready yet on a
+#   previous run. `ingest-and-transform` still runs daily, early enough in
+#   the morning (09:00 UTC = 06:00 America/Sao_Paulo) to give INMET's
+#   systems several hours past midnight local time to finish publishing.
 # - DataSUS/SIH-RD (admissions) has a ~2-month publication lag (see
 #   ingestion/datasus/extract.py's module docstring) — re-running it daily
 #   would mostly re-download data that hasn't changed. `ingest-datasus`
