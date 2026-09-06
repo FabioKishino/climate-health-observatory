@@ -3,8 +3,8 @@ version: 2
 seeds:
   - name: municipalities
     description: >
-      Reference data enriching municipality IBGE codes with a name, state,
-      and coordinates. SIH-RD only carries the IBGE code
+      Reference data enriching municipality codes with a name, state, and
+      coordinates. SIH-RD only carries the code
       (`municipality_residence_code`), not a name or coordinates, so this
       static lookup fills in the rest. Only holds Curitiba for now — add a
       row here for every municipality added to
@@ -16,7 +16,14 @@ seeds:
         state: varchar
     columns:
       - name: ibge_code
-        description: IBGE municipality code.
+        description: >
+          Municipality code, in the 6-digit form SIH-RD's MUNIC_RES field
+          actually uses — confirmed against a real download that DATASUS
+          drops the 7th "check digit" the full official IBGE code carries
+          (Curitiba is commonly quoted as IBGE code 4106902, but its
+          MUNIC_RES value is "410690"). Despite the column name, this is
+          not the complete IBGE code — kept for consistency with what
+          every join in this project actually needs to match against.
         data_tests:
           - not_null
           - unique
@@ -44,7 +51,9 @@ seeds:
         station_code: varchar
     columns:
       - name: municipality_ibge_code
-        description: IBGE municipality code — see dim_location.ibge_code.
+        description: >
+          Municipality code (6-digit SIH-RD form — see the municipalities
+          seed's ibge_code column) — matches dim_location.ibge_code.
         data_tests:
           - not_null
           - unique

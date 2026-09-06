@@ -21,12 +21,18 @@ UF = os.getenv("DATASUS_UF", "PR")
 SIH_GROUP = os.getenv("DATASUS_SIH_GROUP", "RD")
 
 # --- Filters ---
-# Curitiba's IBGE municipality code. Kept as a list (not a single constant)
-# so expanding to the Curitiba Metropolitan Region later is a one-line
-# config change, not a code change.
+# Curitiba's municipality code, in the 6-digit form SIH-RD's own MUNIC_RES
+# field actually uses (DATASUS/SUS systems generally drop the 7th "check
+# digit" that the full official IBGE code carries — confirmed against a
+# real download: MUNIC_RES for Curitiba is "410690", not the commonly-
+# quoted 7-digit IBGE code "4106902"). Every other reference to this
+# municipality in this project (seeds, dim_location) uses this same
+# 6-digit form, to keep every join on it consistent. Kept as a list (not
+# a single constant) so expanding to the Curitiba Metropolitan Region
+# later is a one-line config change, not a code change.
 MUNICIPALITY_IBGE_CODES: list[str] = [
     code.strip()
-    for code in os.getenv("DATASUS_MUNICIPALITY_IBGE_CODES", "4106902").split(",")
+    for code in os.getenv("DATASUS_MUNICIPALITY_IBGE_CODES", "410690").split(",")
     if code.strip()
 ]
 

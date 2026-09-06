@@ -19,8 +19,8 @@ from ingestion.datasus.extract import (
     select_and_rename_columns,
 )
 
-CURITIBA_CODE = "4106902"
-OTHER_MUNICIPALITY_CODE = "4104808"  # Cascavel, PR — used to prove filtering excludes it
+CURITIBA_CODE = "410690"  # SIH-RD's 6-digit form (no IBGE check digit) — confirmed against real data
+OTHER_MUNICIPALITY_CODE = "410480"  # Cascavel, PR — used to prove filtering excludes it
 
 
 def _raw_admission(

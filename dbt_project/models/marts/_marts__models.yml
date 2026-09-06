@@ -42,7 +42,9 @@ models:
       just Curitiba — see seeds/municipalities.csv to add more.
     columns:
       - name: ibge_code
-        description: IBGE municipality code — primary key.
+        description: >
+          Municipality code (6-digit SIH-RD form, not the full 7-digit
+          IBGE code — see seeds/seeds.yml) — primary key.
         data_tests:
           - not_null
           - unique

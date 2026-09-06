@@ -15,7 +15,11 @@ models:
           - not_null
           - unique
       - name: municipality_residence_code
-        description: IBGE code of the patient's municipality of residence.
+        description: >
+          Code of the patient's municipality of residence, in the 6-digit
+          form SIH-RD's MUNIC_RES field actually uses (DATASUS/SUS systems
+          generally drop the 7th "check digit" the full official IBGE code
+          carries — see seeds/seeds.yml for details).
         data_tests:
           - not_null
       - name: admission_date
