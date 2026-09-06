@@ -15,21 +15,28 @@
 #   job, and a different minute/hour than the daily cron so the two never
 #   fire as the same run).
 #
-# These two jobs do NOT depend on each other (no `needs:`, no artifact
-# passing) — deliberately, per docs/adr/0002 (this pipeline's dependency
-# graph is meant to stay simple, not grow orchestrator-shaped coordination
-# just to link two jobs). Instead they're coupled only through a GitHub
-# Actions cache slot: `ingest-datasus` saves its freshly-ingested Parquet
-# under a cache key; `ingest-and-transform` restores whatever was most
-# recently saved there (via `restore-keys`, which falls back to the newest
-# match) before running `dbt build`. On non-Monday days this picks up last
-# Monday's data; on a Monday it's a coin flip whether that day's own run
-# has finished saving before the daily job restores — utterly immaterial
-# given DataSUS's own 2-month lag already makes a same-day mismatch
-# irrelevant. dbt build reads Parquet from disk (see dbt_project/models/
-# staging/*/. _sources.yml), which is why any persistence across runs has
-# to go through an explicit mechanism like this rather than "just being
-# there" — GitHub Actions runners are single-use.
+# These two jobs don't pass data to each other directly (no artifacts) —
+# deliberately, per docs/adr/0002 (this pipeline's dependency graph is
+# meant to stay simple, not grow orchestrator-shaped coordination).
+# Instead they're coupled through a GitHub Actions cache slot:
+# `ingest-datasus` saves its freshly-ingested Parquet under a cache key;
+# `ingest-and-transform` restores whatever was most recently saved there
+# (via `restore-keys`, which falls back to the newest match) before
+# running `dbt build`. dbt build reads Parquet from disk (see
+# dbt_project/models/staging/*/*_sources.yml), which is why any
+# persistence across runs has to go through an explicit mechanism like
+# this rather than "just being there" — GitHub Actions runners are
+# single-use.
+#
+# `ingest-and-transform` still declares `needs: [ingest-datasus]` — purely
+# for execution ORDER, not for the skip logic (see that job's own `if:`
+# comment). On the real weekly/daily cron schedule this genuinely doesn't
+# matter, since the two fire as separate runs an hour apart. It matters
+# for `workflow_dispatch`: with `force_datasus=true`, a single manual run
+# triggers both jobs together, and without `needs:` the cache-restore step
+# can race ahead of the cache-save step and silently pick up a stale
+# cache — confirmed happening on a real run, where dbt then built on
+# pre-fix data despite the fix already being deployed.
 #
 # KNOWN BOOTSTRAP LIMITATION: until `ingest-datasus` has succeeded at
 # least once, no DataSUS cache exists, and `dbt build` will fail outright
@@ -91,7 +98,22 @@ jobs:
 
   ingest-and-transform:
     name: Ingest INMET, run dbt build, report
-    if: github.event.schedule == '0 9 * * *' || github.event_name == 'workflow_dispatch'
+    # needs: [ingest-datasus] exists purely for sequencing, not data flow —
+    # see the file-level comment. Without it, a manual workflow_dispatch
+    # run with force_datasus=true starts both jobs concurrently, and this
+    # job's cache-restore can race ahead of ingest-datasus's cache-save,
+    # silently picking up last week's (or an even older) cache instead of
+    # the one just produced in the same run (confirmed: this raced and
+    # picked up stale, pre-fix data on a real run). The `always()` +
+    # explicit schedule/dispatch check below is required because a plain
+    # `needs:` implicitly skips this job whenever ingest-datasus is
+    # skipped (i.e. every non-Monday cron run) — which would otherwise
+    # break the daily run entirely.
+    needs: [ingest-datasus]
+    if: >
+      always() &&
+      needs.ingest-datasus.result != 'failure' &&
+      (github.event.schedule == '0 9 * * *' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
