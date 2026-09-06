@@ -49,7 +49,21 @@ class InmetClient:
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.max_backoff = max_backoff
-        self._client = httpx.Client(timeout=timeout, transport=transport)
+        # A browser-like User-Agent works around what appears to be a WAF
+        # dropping requests from httpx's default UA ("python-httpx/x.y.z")
+        # with no response at all — observed against the real API from
+        # GitHub Actions' runners, not just a local network quirk.
+        self._client = httpx.Client(
+            timeout=timeout,
+            transport=transport,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/json",
+            },
+        )
 
     def __enter__(self) -> Self:
         return self
