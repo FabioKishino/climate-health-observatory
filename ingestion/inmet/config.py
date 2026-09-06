@@ -9,12 +9,18 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# --- API ---
-BASE_URL = os.getenv("INMET_BASE_URL", "https://apitempo.inmet.gov.br")
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("INMET_TIMEOUT_SECONDS", "30"))
-MAX_RETRIES = int(os.getenv("INMET_MAX_RETRIES", "5"))
-BACKOFF_FACTOR_SECONDS = float(os.getenv("INMET_BACKOFF_FACTOR_SECONDS", "1"))
-MAX_BACKOFF_SECONDS = float(os.getenv("INMET_MAX_BACKOFF_SECONDS", "60"))
+# --- Data source ---
+# INMET's official annual bulk historical archive (one ZIP per year, one
+# CSV per station inside). See docs/adr/0005 for why this is used instead
+# of INMET's live REST API (apitempo.inmet.gov.br), which was found to be
+# unreliable in production.
+ARCHIVE_URL_TEMPLATE = os.getenv(
+    "INMET_ARCHIVE_URL_TEMPLATE",
+    "https://portal.inmet.gov.br/uploads/dadoshistoricos/{year}.zip",
+)
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("INMET_TIMEOUT_SECONDS", "120"))
+MAX_RETRIES = int(os.getenv("INMET_MAX_RETRIES", "3"))
+BACKOFF_FACTOR_SECONDS = float(os.getenv("INMET_BACKOFF_FACTOR_SECONDS", "2"))
 
 # --- Stations ---
 # A807 is Curitiba's INMET automatic weather station. Kept as a

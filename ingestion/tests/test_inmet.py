@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from typing import Self
 
 import httpx
@@ -189,70 +191,178 @@ def test_aggregate_daily_empty_input():
 
 # --- InmetClient ---
 
+_CSV_HEADER = (
+    "Data;Hora UTC;PRECIPITAÇÃO TOTAL, HORÁRIO (mm);"
+    "TEMPERATURA DO AR - BULBO SECO, HORARIA (°C);"
+    "TEMPERATURA MÁXIMA NA HORA ANT. (AUT) (°C);"
+    "TEMPERATURA MÍNIMA NA HORA ANT. (AUT) (°C);"
+    "UMIDADE RELATIVA DO AR, HORARIA (%);"
+)
 
-def test_client_returns_parsed_json_on_success():
+
+def _build_archive_bytes(
+    *,
+    station_code: str = STATION_CODE,
+    station_name: str = "CURITIBA",
+    state: str = "PR",
+    latitude: str = "-25,4486111",
+    longitude: str = "-49,23055554",
+    rows: tuple[tuple[str, ...], ...] = (("2024/05/01", "1200", "0,2", "18,4", "19,0", "17,5", "80"),),
+) -> bytes:
+    """Builds an in-memory ZIP matching INMET's real bulk archive format:
+    one CSV per station, 8 metadata lines, a header, then hourly rows."""
+    lines = [
+        "REGIAO:;S",
+        f"UF:;{state}",
+        f"ESTACAO:;{station_name}",
+        f"CODIGO (WMO):;{station_code}",
+        f"LATITUDE:;{latitude}",
+        f"LONGITUDE:;{longitude}",
+        "ALTITUDE:;900,00",
+        "DATA DE FUNDACAO:;01/01/03",
+        _CSV_HEADER,
+        *(";".join(row) + ";" for row in rows),
+    ]
+    csv_bytes = "\n".join(lines).encode("latin-1")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr(
+            f"INMET_S_{state}_{station_code}_{station_name}_01-01-2024_A_31-12-2024.CSV",
+            csv_bytes,
+        )
+    return buffer.getvalue()
+
+
+def _archive_handler(archives_by_year: dict[int, bytes | None], call_counts: dict[int, int] | None = None):
+    """Builds a MockTransport handler serving different archive bytes (or a
+    404) per year, based on the year embedded in the request URL."""
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[{"CD_ESTACAO": STATION_CODE, "DT_MEDICAO": "2024-05-01"}])
+        year = int(str(request.url).rstrip(".zip").split("/")[-1])
+        if call_counts is not None:
+            call_counts[year] = call_counts.get(year, 0) + 1
+        content = archives_by_year.get(year)
+        if content is None:
+            return httpx.Response(404)
+        return httpx.Response(200, content=content)
 
-    client = _make_client(handler)
+    return handler
+
+
+def test_client_downloads_and_parses_station_readings():
+    archive = _build_archive_bytes(
+        rows=(
+            ("2024/05/01", "1200", "0,2", "18,4", "19,0", "17,5", "80"),
+            ("2024/05/02", "1200", "0,0", "20,0", "21,0", "19,0", "70"),
+        )
+    )
+    client = _make_client(_archive_handler({2024: archive}))
+
+    result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-02")
+
+    assert result == [
+        {
+            "CD_ESTACAO": STATION_CODE,
+            "DC_NOME": "CURITIBA",
+            "UF": "PR",
+            "VL_LATITUDE": "-25,4486111",
+            "VL_LONGITUDE": "-49,23055554",
+            "DT_MEDICAO": "2024-05-01",
+            "TEM_INS": "18,4",
+            "TEM_MAX": "19,0",
+            "TEM_MIN": "17,5",
+            "UMD_INS": "80",
+            "CHUVA": "0,2",
+        },
+        {
+            "CD_ESTACAO": STATION_CODE,
+            "DC_NOME": "CURITIBA",
+            "UF": "PR",
+            "VL_LATITUDE": "-25,4486111",
+            "VL_LONGITUDE": "-49,23055554",
+            "DT_MEDICAO": "2024-05-02",
+            "TEM_INS": "20,0",
+            "TEM_MAX": "21,0",
+            "TEM_MIN": "19,0",
+            "UMD_INS": "70",
+            "CHUVA": "0,0",
+        },
+    ]
+
+
+def test_client_filters_rows_outside_the_requested_date_range():
+    archive = _build_archive_bytes(
+        rows=(
+            ("2024/04/30", "1200", "0", "10,0", "10,0", "10,0", "50"),
+            ("2024/05/01", "1200", "0", "18,4", "19,0", "17,5", "80"),
+            ("2024/05/03", "1200", "0", "15,0", "15,0", "15,0", "60"),
+        )
+    )
+    client = _make_client(_archive_handler({2024: archive}))
+
     result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
-    assert result == [{"CD_ESTACAO": STATION_CODE, "DT_MEDICAO": "2024-05-01"}]
+    assert [r["DT_MEDICAO"] for r in result] == ["2024-05-01"]
 
 
-def test_client_handles_empty_response():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[])
+def test_client_returns_empty_list_when_station_not_in_archive():
+    archive = _build_archive_bytes(station_code="A999")
+    client = _make_client(_archive_handler({2024: archive}))
 
-    client = _make_client(handler)
     result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
     assert result == []
 
 
-def test_client_handles_204_no_content():
-    """The real API returns 204 (empty body), not a 200 with an empty
-    array, when there's no data for the requested period — confirmed by
-    actually hitting the live API from a real GitHub Actions run."""
+def test_client_returns_empty_list_when_year_not_published():
+    client = _make_client(_archive_handler({2024: None}))
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(204)
-
-    client = _make_client(handler)
     result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
     assert result == []
 
 
-def test_client_raises_on_non_retryable_http_error():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, json={"error": "station not found"})
+def test_client_spans_a_year_boundary():
+    archive_2023 = _build_archive_bytes(rows=(("2023/12/31", "1200", "0", "10,0", "10,0", "10,0", "50"),))
+    archive_2024 = _build_archive_bytes(rows=(("2024/01/01", "1200", "0", "12,0", "12,0", "12,0", "55"),))
+    client = _make_client(_archive_handler({2023: archive_2023, 2024: archive_2024}))
 
-    client = _make_client(handler)
+    result = client.get_station_readings(STATION_CODE, "2023-12-31", "2024-01-01")
 
-    with pytest.raises(InmetAPIError):
-        client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
+    assert [r["DT_MEDICAO"] for r in result] == ["2023-12-31", "2024-01-01"]
 
 
-def test_client_retries_transient_errors_then_succeeds(monkeypatch):
+def test_client_caches_the_archive_across_calls_for_the_same_year():
+    archive = _build_archive_bytes()
+    call_counts: dict[int, int] = {}
+    client = _make_client(_archive_handler({2024: archive}, call_counts))
+
+    client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
+    client.get_station_readings(STATION_CODE, "2024-05-02", "2024-05-02")
+
+    assert call_counts == {2024: 1}
+
+
+def test_client_retries_transport_errors_then_succeeds(monkeypatch):
     monkeypatch.setattr("ingestion.inmet.client.time.sleep", lambda *_args, **_kwargs: None)
-
+    archive = _build_archive_bytes()
     call_count = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         call_count["n"] += 1
-        if call_count["n"] < 3:
-            return httpx.Response(503)
-        return httpx.Response(200, json=[{"CD_ESTACAO": STATION_CODE}])
+        if call_count["n"] == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, content=archive)
 
-    client = _make_client(handler, max_retries=5)
+    client = _make_client(handler, max_retries=3)
     result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
-    assert result == [{"CD_ESTACAO": STATION_CODE}]
-    assert call_count["n"] == 3
+    assert len(result) == 1
+    assert call_count["n"] == 2
 
 
-def test_client_raises_after_exhausting_retries(monkeypatch):
+def test_client_raises_after_exhausting_retries_on_unexpected_status(monkeypatch):
     monkeypatch.setattr("ingestion.inmet.client.time.sleep", lambda *_args, **_kwargs: None)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -264,71 +374,20 @@ def test_client_raises_after_exhausting_retries(monkeypatch):
         client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
 
-def test_client_respects_retry_after_header_on_429(monkeypatch):
-    sleep_calls: list[float] = []
-    monkeypatch.setattr(
-        "ingestion.inmet.client.time.sleep", lambda seconds: sleep_calls.append(seconds)
-    )
-
-    call_count = {"n": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return httpx.Response(429, headers={"Retry-After": "2"})
-        return httpx.Response(200, json=[])
-
-    client = _make_client(handler, max_retries=3)
-    client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
-
-    assert sleep_calls == [2.0]
-
-
-def test_client_falls_back_to_backoff_when_retry_after_is_not_numeric(monkeypatch):
-    sleep_calls: list[float] = []
-    monkeypatch.setattr(
-        "ingestion.inmet.client.time.sleep", lambda seconds: sleep_calls.append(seconds)
-    )
-
-    call_count = {"n": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            # Per HTTP spec, Retry-After may be an HTTP-date instead of seconds.
-            return httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
-        return httpx.Response(200, json=[])
-
-    client = _make_client(handler, max_retries=3, backoff_factor=1.0)
-    client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
-
-    assert len(sleep_calls) == 1
-    assert sleep_calls[0] >= 1.0  # fell back to exponential backoff, not a parsed date
-
-
-def test_client_retries_transport_errors_then_succeeds(monkeypatch):
+def test_client_raises_after_exhausting_retries_on_transport_errors(monkeypatch):
     monkeypatch.setattr("ingestion.inmet.client.time.sleep", lambda *_args, **_kwargs: None)
 
-    call_count = {"n": 0}
-
     def handler(request: httpx.Request) -> httpx.Response:
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            raise httpx.ConnectError("connection refused", request=request)
-        return httpx.Response(200, json=[])
+        raise httpx.ConnectError("connection refused", request=request)
 
     client = _make_client(handler, max_retries=3)
-    result = client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
-    assert result == []
-    assert call_count["n"] == 2
+    with pytest.raises(InmetAPIError):
+        client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01")
 
 
 def test_client_context_manager_closes_underlying_httpx_client():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[])
-
-    with _make_client(handler) as client:
+    with _make_client(_archive_handler({2024: None})) as client:
         assert client.get_station_readings(STATION_CODE, "2024-05-01", "2024-05-01") == []
 
     assert client._client.is_closed

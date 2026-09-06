@@ -1,19 +1,37 @@
-"""HTTP client for INMET's public weather station API.
+"""Data client for INMET's official bulk historical data archives.
 
-INMET (apitempo.inmet.gov.br) exposes hourly automatic weather station
-readings at:
+INMET's live REST API (apitempo.inmet.gov.br) was found to be unreliable
+in production during this project's development — see docs/adr/0005 for
+the full investigation. Across real attempts it silently dropped
+connections, returned empty (204) responses, and timed out, with three
+different symptoms across three separate runs; independent sources
+confirm this is a known characteristic of that undocumented, WAF-fronted
+API, not a bug in this client.
 
-    GET /estacao/{startDate}/{endDate}/{stationCode}
+This client instead downloads INMET's official annual bulk archive
+(https://portal.inmet.gov.br/uploads/dadoshistoricos/{year}.zip) — a
+static file server, a fundamentally more reliable class of service than a
+dynamic per-request API sitting behind a WAF. Each ZIP contains one
+semicolon-delimited, Latin-1-encoded CSV per station, named like
+"INMET_S_PR_A807_CURITIBA_01-01-2026_A_31-08-2026.CSV": the first 8 lines
+are station metadata (region, state, name, WMO code, coordinates,
+altitude, founding date), the 9th is the column header, and the rest are
+hourly readings, one row per hour.
 
-This client wraps that endpoint with timeout handling, exponential backoff
-retries (with jitter) on transient failures, and explicit handling of
-HTTP 429 rate limiting via the `Retry-After` header.
+`get_station_readings` returns records shaped exactly like the old live
+API's JSON records (CD_ESTACAO, DC_NOME, UF, VL_LATITUDE, VL_LONGITUDE,
+DT_MEDICAO, TEM_INS, TEM_MAX, TEM_MIN, UMD_INS, CHUVA) — matching
+extract.py's parse_hourly_readings exactly — so this rewrite is confined
+entirely to this module; nothing downstream needed to change.
 """
 
 from __future__ import annotations
 
-import random
+import csv
+import io
 import time
+import zipfile
+from datetime import date
 from typing import Any, Self
 
 import httpx
@@ -23,47 +41,49 @@ from ingestion.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-# Server errors and connection-level failures are considered transient and
-# are retried. 4xx errors (other than 429) indicate a bad request and are
-# not retried.
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+# A browser-like User-Agent is required — INMET's static file host, like
+# its live API, sits behind a WAF that appears to block default HTTP
+# client User-Agents outright.
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    ),
+}
+
+# Column names as they appear in the CSV header, mapped to the JSON-API
+# field names extract.py's parse_hourly_readings expects.
+_COLUMN_MAP = {
+    "TEM_INS": "TEMPERATURA DO AR - BULBO SECO, HORARIA (°C)",
+    "TEM_MAX": "TEMPERATURA MÁXIMA NA HORA ANT. (AUT) (°C)",
+    "TEM_MIN": "TEMPERATURA MÍNIMA NA HORA ANT. (AUT) (°C)",
+    "UMD_INS": "UMIDADE RELATIVA DO AR, HORARIA (%)",
+    "CHUVA": "PRECIPITAÇÃO TOTAL, HORÁRIO (mm)",
+}
 
 
 class InmetAPIError(Exception):
-    """Raised when the INMET API request fails after all retries are exhausted."""
+    """Raised when an INMET bulk archive can't be downloaded or parsed."""
 
 
 class InmetClient:
-    """Thin HTTP client for the INMET automatic weather station API."""
+    """Downloads and parses INMET's official annual bulk historical archives."""
 
     def __init__(
         self,
-        base_url: str = config.BASE_URL,
+        archive_url_template: str = config.ARCHIVE_URL_TEMPLATE,
         timeout: float = config.REQUEST_TIMEOUT_SECONDS,
         max_retries: int = config.MAX_RETRIES,
         backoff_factor: float = config.BACKOFF_FACTOR_SECONDS,
-        max_backoff: float = config.MAX_BACKOFF_SECONDS,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.archive_url_template = archive_url_template
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
-        self.max_backoff = max_backoff
-        # A browser-like User-Agent works around what appears to be a WAF
-        # dropping requests from httpx's default UA ("python-httpx/x.y.z")
-        # with no response at all — observed against the real API from
-        # GitHub Actions' runners, not just a local network quirk.
         self._client = httpx.Client(
-            timeout=timeout,
-            transport=transport,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json",
-            },
+            timeout=timeout, headers=_HEADERS, transport=transport, follow_redirects=True
         )
+        self._archive_cache: dict[int, zipfile.ZipFile | None] = {}
 
     def __enter__(self) -> Self:
         return self
@@ -79,19 +99,37 @@ class InmetClient:
     ) -> list[dict[str, Any]]:
         """Fetches hourly readings for a station between two dates (inclusive).
 
-        Dates must be in "YYYY-MM-DD" format, matching the API's contract.
-        Returns an empty list if the API returns no readings for the period
-        — confirmed against the real API to arrive as an HTTP 204 (No
-        Content, empty body) rather than a 200 with an empty JSON array.
+        Dates must be in "YYYY-MM-DD" format. Returns an empty list if no
+        archive is published for the requested year(s), the station has no
+        entry in it, or no rows fall within the requested range.
         """
-        url = f"{self.base_url}/estacao/{start_date}/{end_date}/{station_code}"
-        response = self._request_with_retry(url, station_code=station_code)
-        if response.status_code == 204:
-            return []
-        data = response.json()
-        return data or []
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
 
-    def _request_with_retry(self, url: str, *, station_code: str) -> httpx.Response:
+        records: list[dict[str, Any]] = []
+        for year in range(start.year, end.year + 1):
+            archive = self._get_archive(year)
+            if archive is not None:
+                records.extend(self._read_station_csv(archive, station_code, start, end))
+        return records
+
+    def _get_archive(self, year: int) -> zipfile.ZipFile | None:
+        if year in self._archive_cache:
+            return self._archive_cache[year]
+
+        url = self.archive_url_template.format(year=year)
+        response = self._request_with_retry(url, year=year)
+
+        if response.status_code == 404:
+            logger.warning("No INMET bulk archive published for year", extra={"year": year})
+            self._archive_cache[year] = None
+            return None
+
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        self._archive_cache[year] = archive
+        return archive
+
+    def _request_with_retry(self, url: str, *, year: int) -> httpx.Response:
         last_error: Exception | None = None
 
         for attempt in range(1, self.max_retries + 1):
@@ -100,62 +138,79 @@ class InmetClient:
             except httpx.TransportError as exc:
                 last_error = exc
                 logger.warning(
-                    "INMET request failed with a transport error",
-                    extra={"station_code": station_code, "attempt": attempt, "error": str(exc)},
+                    "INMET archive request failed with a transport error",
+                    extra={"year": year, "attempt": attempt, "error": str(exc)},
                 )
-                self._sleep_before_retry(attempt)
+                time.sleep(self.backoff_factor * attempt)
                 continue
 
-            if response.status_code in (200, 204):
+            if response.status_code in (200, 404):
                 return response
 
-            if response.status_code not in _RETRYABLE_STATUS_CODES:
-                logger.error(
-                    "INMET request failed with a non-retryable error",
-                    extra={
-                        "station_code": station_code,
-                        "status_code": response.status_code,
-                    },
-                )
-                raise InmetAPIError(
-                    f"INMET API returned non-retryable status "
-                    f"{response.status_code} for station {station_code}"
-                )
-
             last_error = InmetAPIError(
-                f"INMET API returned status {response.status_code} "
-                f"for station {station_code}"
+                f"INMET archive download for {year} returned status {response.status_code}"
             )
             logger.warning(
-                "INMET request returned a retryable error",
-                extra={
-                    "station_code": station_code,
-                    "attempt": attempt,
-                    "status_code": response.status_code,
-                },
+                "INMET archive request returned an unexpected status",
+                extra={"year": year, "attempt": attempt, "status_code": response.status_code},
             )
-            self._sleep_before_retry(attempt, response=response)
+            time.sleep(self.backoff_factor * attempt)
 
         logger.error(
-            "INMET request exhausted all retries",
-            extra={"station_code": station_code, "max_retries": self.max_retries},
+            "INMET archive request exhausted all retries",
+            extra={"year": year, "max_retries": self.max_retries},
         )
         raise InmetAPIError(
-            f"INMET API request failed after {self.max_retries} attempts "
-            f"for station {station_code}"
+            f"Failed to download the INMET archive for {year} after {self.max_retries} attempts"
         ) from last_error
 
-    def _sleep_before_retry(self, attempt: int, response: httpx.Response | None = None) -> None:
-        if response is not None and response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            if retry_after is not None:
-                try:
-                    time.sleep(float(retry_after))
-                    return
-                except ValueError:
-                    pass
+    def _read_station_csv(
+        self, archive: zipfile.ZipFile, station_code: str, start: date, end: date
+    ) -> list[dict[str, Any]]:
+        matches = [name for name in archive.namelist() if f"_{station_code}_" in name]
+        if not matches:
+            logger.warning(
+                "No archive entry found for station", extra={"station_code": station_code}
+            )
+            return []
 
-        # Exponential backoff with jitter, capped at max_backoff.
-        delay = min(self.backoff_factor * (2 ** (attempt - 1)), self.max_backoff)
-        delay += random.uniform(0, delay * 0.1)
-        time.sleep(delay)
+        with archive.open(matches[0]) as f:
+            lines = f.read().decode("latin-1").splitlines()
+
+        metadata = dict(line.split(";", 1) for line in lines[:8] if ";" in line)
+        station_name = metadata.get("ESTACAO:", "").strip() or None
+        state = metadata.get("UF:", "").strip() or None
+        latitude = metadata.get("LATITUDE:", "").strip() or None
+        longitude = metadata.get("LONGITUDE:", "").strip() or None
+
+        header = [column.strip() for column in lines[8].split(";")]
+        reader = csv.DictReader(lines[9:], fieldnames=header, delimiter=";")
+
+        records: list[dict[str, Any]] = []
+        for row in reader:
+            raw_date = row.get("Data")
+            if not raw_date:
+                continue
+            try:
+                measurement_date = date(*(int(part) for part in raw_date.split("/")))
+            except (TypeError, ValueError):
+                continue
+            if not (start <= measurement_date <= end):
+                continue
+
+            records.append(
+                {
+                    "CD_ESTACAO": station_code,
+                    "DC_NOME": station_name,
+                    "UF": state,
+                    "VL_LATITUDE": latitude,
+                    "VL_LONGITUDE": longitude,
+                    "DT_MEDICAO": measurement_date.isoformat(),
+                    **{
+                        json_field: row.get(csv_column)
+                        for json_field, csv_column in _COLUMN_MAP.items()
+                    },
+                }
+            )
+
+        return records
