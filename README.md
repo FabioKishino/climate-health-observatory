@@ -60,10 +60,12 @@ flowchart LR
     PARQUET --> STG --> INT --> MARTS --> MD
     MD --> API --> DASH
 
-    Ingestion -. on failure .-> TG
-    Ingestion -. on success .-> HC
-    Transform -. tests + freshness .-> EL
+    Ingestion -.-> TG
+    Ingestion -.-> HC
+    Transform -.-> EL
 ```
+
+_Dotted lines: ingestion → Telegram on failure, ingestion → healthchecks.io on success, dbt → Elementary for test/freshness results._
 
 Two GitHub Actions workflows drive this: `ci.yml` validates every pull request (lint, unit
 tests, `dbt parse`/`compile`); `daily-pipeline.yml` runs the real pipeline (INMET daily,
