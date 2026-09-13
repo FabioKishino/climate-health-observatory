@@ -8,6 +8,16 @@
 #   previous run. `ingest-and-transform` still runs daily, early enough in
 #   the morning (09:00 UTC = 06:00 America/Sao_Paulo) to give INMET's
 #   systems several hours past midnight local time to finish publishing.
+#   Because that 10-day window is all any single run ever fetches, and
+#   `fct_daily_climate` is a full-refresh table (not incremental — see
+#   dbt_project.yml), history has to be preserved on disk across runs the
+#   same way DataSUS's is below: `ingest-and-transform` restores its own
+#   `inmet-raw-data-` cache before ingesting (so the new 10-day window lands
+#   on top of everything previously accumulated, and `write_daily_climate_parquet`
+#   only overwrites the specific date partitions it just fetched) and saves
+#   it again afterward. Without this, every run would silently wipe out all
+#   climate history older than 10 days on the next `dbt build` — confirmed
+#   as a real bug, not a hypothetical.
 # - DataSUS/SIH-RD (admissions) has a ~2-month publication lag (see
 #   ingestion/datasus/extract.py's module docstring) — re-running it daily
 #   would mostly re-download data that hasn't changed. `ingest-datasus`
@@ -128,8 +138,22 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-root
 
+      - name: Restore accumulated INMET raw data
+        uses: actions/cache/restore@v4
+        with:
+          path: ingestion/data/raw/inmet
+          key: inmet-raw-data-${{ github.run_id }}
+          restore-keys: |
+            inmet-raw-data-
+
       - name: Run INMET ingestion
         run: poetry run python -m ingestion.inmet.extract
+
+      - name: Save accumulated INMET raw data to cache
+        uses: actions/cache/save@v4
+        with:
+          path: ingestion/data/raw/inmet
+          key: inmet-raw-data-${{ github.run_id }}
 
       - name: Restore last known DataSUS raw data
         uses: actions/cache/restore@v4
