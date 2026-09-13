@@ -4,8 +4,7 @@ Does climate variation correlate with spikes in respiratory hospital admissions?
 end-to-end, tested, observed data pipeline that ingests real Brazilian climate and public
 health data to find out — for Curitiba, Paraná, over the last 24 months.
 
-**🔗 Live dashboard:** not yet deployed — see [Running locally](#running-locally) to run it
-yourself in the meantime.
+**🔗 Live dashboard:** https://climate-health-observatory.vercel.app
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Poetry](https://img.shields.io/badge/Poetry-dependency%20management-60A5FA?logo=poetry&logoColor=white)
