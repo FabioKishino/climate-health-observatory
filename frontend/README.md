@@ -32,5 +32,6 @@ no native binary to bundle. See `src/lib/motherduck.ts`.
 
 ## Deploying
 
-Deploy this directory (`frontend/`) to Vercel as the project root, with the three
-environment variables above set in the Vercel project settings.
+The Vercel project is connected to this GitHub repository (root directory: `frontend/`),
+with the three environment variables above set in the Vercel project settings — pushes to
+`main` deploy to production automatically.
