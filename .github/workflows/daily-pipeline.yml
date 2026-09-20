@@ -138,6 +138,19 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-root
 
+      - name: Seed INMET raw data from the committed historical baseline
+        # ingestion/seed/inmet/ is a one-time, git-tracked backfill (2024-05
+        # onward) — see ingestion/seed/README.md. Copied in before the cache
+        # restore below so stg_inmet__daily_climate's read_parquet() glob is
+        # *never* empty, regardless of CI cache state: DuckDB hard-errors on
+        # a glob matching zero files (confirmed directly — see that source
+        # config's own comment), so a cold or evicted cache would otherwise
+        # break every dbt build until the next lucky cache hit. The cache
+        # restore, if it has anything, still layers on top as usual.
+        run: |
+          mkdir -p ingestion/data/raw/inmet
+          cp -rn ingestion/seed/inmet/. ingestion/data/raw/inmet/
+
       - name: Restore accumulated INMET raw data
         uses: actions/cache/restore@v4
         with:
@@ -147,6 +160,12 @@ jobs:
             inmet-raw-data-
 
       - name: Run INMET ingestion
+        # A failure here (e.g. INMET's archive server timing out — it's a
+        # large annual ZIP and known to be flaky, see docs/adr/0005) is
+        # treated as "no new data today" rather than crashing the job: see
+        # main()'s handling of InmetAPIError in ingestion/inmet/extract.py.
+        # The committed seed plus whatever the cache holds is still a valid,
+        # complete dataset for dbt build to run against.
         run: poetry run python -m ingestion.inmet.extract
 
       - name: Save accumulated INMET raw data to cache

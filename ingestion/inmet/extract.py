@@ -39,7 +39,7 @@ from typing import Any
 import duckdb
 
 from ingestion.inmet import config
-from ingestion.inmet.client import InmetClient
+from ingestion.inmet.client import InmetAPIError, InmetClient
 from ingestion.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -319,11 +319,26 @@ def main() -> None:
     parser.add_argument("--end-date", default=default_end, help="YYYY-MM-DD (inclusive)")
     args = parser.parse_args()
 
-    row_count = extract_daily_climate(
-        station_codes=config.STATION_CODES,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
+    try:
+        row_count = extract_daily_climate(
+            station_codes=config.STATION_CODES,
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
+    except InmetAPIError as exc:
+        # INMET's archive server is a known-flaky, WAF-fronted static host
+        # (see docs/adr/0005) — a download failure here is treated the same
+        # as "no new data was available this run", not a pipeline failure:
+        # this same window gets retried on tomorrow's scheduled run, and the
+        # committed seed (ingestion/seed/inmet/) plus whatever the CI cache
+        # already holds is still a complete, valid dataset for dbt build.
+        logger.error(
+            "INMET extraction failed to reach the archive; leaving previously "
+            "ingested data untouched for this run",
+            extra={"error": str(exc)},
+        )
+        return
+
     logger.info("INMET extraction finished", extra={"row_count": row_count})
 
 

@@ -16,6 +16,7 @@ from ingestion.inmet.extract import (
     _parse_float,
     aggregate_daily,
     extract_daily_climate,
+    main,
     parse_hourly_readings,
     write_daily_climate_parquet,
 )
@@ -510,3 +511,20 @@ def test_default_date_range_is_a_trailing_10_day_window_ending_yesterday():
 
     assert end == (today - timedelta(days=1)).isoformat()
     assert start == (today - timedelta(days=10)).isoformat()
+
+
+# --- main ---
+
+
+def test_main_does_not_raise_when_the_archive_is_unreachable(monkeypatch):
+    """A download failure (INMET's archive server is known-flaky — see
+    docs/adr/0005) must not crash the scheduled pipeline: it's treated as
+    "no new data this run", self-healing on the next scheduled run."""
+    monkeypatch.setattr("sys.argv", ["extract.py"])
+
+    def _raise(*_args, **_kwargs):
+        raise InmetAPIError("simulated archive download failure")
+
+    monkeypatch.setattr("ingestion.inmet.extract.extract_daily_climate", _raise)
+
+    main()  # must not raise
